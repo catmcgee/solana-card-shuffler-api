@@ -1,7 +1,6 @@
 {
   "license": "ISC",
   "scripts": {
-    "test": "jest",
     "lint:fix": "prettier */*.js \"*/**/*{.js,.ts}\" -w",
     "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check"
   },

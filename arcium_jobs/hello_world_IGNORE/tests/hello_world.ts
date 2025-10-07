@@ -1,7 +1,7 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
-import { ShuffleDeal } from "../target/types/shuffle_deal";
+import { HelloWorld } from "../target/types/hello_world";
 import { randomBytes } from "crypto";
 import {
   awaitComputationFinalization,
@@ -11,32 +11,57 @@ import {
   getArciumProgAddress,
   uploadCircuit,
   buildFinalizeCompDefTx,
+  RescueCipher,
+  deserializeLE,
   getMXEPublicKey,
   getMXEAccAddress,
   getMempoolAccAddress,
   getCompDefAccAddress,
   getExecutingPoolAccAddress,
   getComputationAccAddress,
+  x25519,
+  getClusterAccAddress,
 } from "@arcium-hq/client";
 import * as fs from "fs";
 import * as os from "os";
 import { expect } from "chai";
 
-describe("ShuffleDeal", () => {
+describe("HelloWorld", () => {
+  // Configure the client to use the local cluster.
   anchor.setProvider(anchor.AnchorProvider.env());
-  const program = anchor.workspace.ShuffleDeal as Program<ShuffleDeal>;
+  const program = anchor.workspace.HelloWorld as Program<HelloWorld>;
   const provider = anchor.getProvider();
 
-  const arciumEnv = getArciumEnv();
+  type Event = anchor.IdlEvents<(typeof program)["idl"]>;
+  const awaitEvent = async <E extends keyof Event>(
+    eventName: E
+  ): Promise<Event[E]> => {
+    let listenerId: number;
+    const event = await new Promise<Event[E]>((res) => {
+      listenerId = program.addEventListener(eventName, (event) => {
+        res(event);
+      });
+    });
+    await program.removeEventListener(listenerId);
 
-  it("Shuffle and deal cards", async () => {
+    return event;
+  };
+
+  const clusterAccount = getClusterAccAddress(1078779259);
+
+  it("Is initialized!", async () => {
     const owner = readKpJson(`${os.homedir()}/.config/solana/id.json`);
 
-    console.log("Initializing shuffle_and_deal computation definition");
-    const initSig = await initShuffleCompDef(program, owner, false, false);
+    console.log("Initializing add together computation definition");
+    const initATSig = await initAddTogetherCompDef(
+      program,
+      owner,
+      false,
+      false
+    );
     console.log(
-      "Shuffle computation definition initialized with signature",
-      initSig
+      "Add together computation definition initialized with signature",
+      initATSig
     );
 
     const mxePublicKey = await getMXEPublicKeyWithRetry(
@@ -46,29 +71,44 @@ describe("ShuffleDeal", () => {
 
     console.log("MXE x25519 pubkey is", mxePublicKey);
 
+    const privateKey = x25519.utils.randomSecretKey();
+    const publicKey = x25519.getPublicKey(privateKey);
+
+    const sharedSecret = x25519.getSharedSecret(privateKey, mxePublicKey);
+    const cipher = new RescueCipher(sharedSecret);
+
+    const val1 = BigInt(1);
+    const val2 = BigInt(2);
+    const plaintext = [val1, val2];
+
+    const nonce = randomBytes(16);
+    const ciphertext = cipher.encrypt(plaintext, nonce);
+
+    const sumEventPromise = awaitEvent("sumEvent");
     const computationOffset = new anchor.BN(randomBytes(8), "hex");
-    const cardsPerPlayer = 2;
 
     const queueSig = await program.methods
-      .shuffleAndDeal(computationOffset, cardsPerPlayer)
+      .addTogether(
+        computationOffset,
+        Array.from(ciphertext[0]),
+        Array.from(ciphertext[1]),
+        Array.from(publicKey),
+        new anchor.BN(deserializeLE(nonce).toString())
+      )
       .accountsPartial({
-        payer: owner.publicKey,
         computationAccount: getComputationAccAddress(
           program.programId,
           computationOffset
         ),
-        clusterAccount: arciumEnv.arciumClusterPubkey,
+        clusterAccount: clusterAccount,
         mxeAccount: getMXEAccAddress(program.programId),
         mempoolAccount: getMempoolAccAddress(program.programId),
         executingPool: getExecutingPoolAccAddress(program.programId),
         compDefAccount: getCompDefAccAddress(
           program.programId,
-          Buffer.from(
-            getCompDefAccOffset("shuffle_and_deal")
-          ).readUInt32LE()
+          Buffer.from(getCompDefAccOffset("add_together")).readUInt32LE()
         ),
       })
-      .signers([owner])
       .rpc({ skipPreflight: true, commitment: "confirmed" });
     console.log("Queue sig is ", queueSig);
 
@@ -79,11 +119,14 @@ describe("ShuffleDeal", () => {
       "confirmed"
     );
     console.log("Finalize sig is ", finalizeSig);
-    console.log("Cards shuffled and dealt successfully!");
+
+    const sumEvent = await sumEventPromise;
+    const decrypted = cipher.decrypt([sumEvent.sum], sumEvent.nonce)[0];
+    expect(decrypted).to.equal(val1 + val2);
   });
 
-  async function initShuffleCompDef(
-    program: Program<ShuffleDeal>,
+  async function initAddTogetherCompDef(
+    program: Program<HelloWorld>,
     owner: anchor.web3.Keypair,
     uploadRawCircuit: boolean,
     offchainSource: boolean
@@ -91,7 +134,7 @@ describe("ShuffleDeal", () => {
     const baseSeedCompDefAcc = getArciumAccountBaseSeed(
       "ComputationDefinitionAccount"
     );
-    const offset = getCompDefAccOffset("shuffle_and_deal");
+    const offset = getCompDefAccOffset("add_together");
 
     const compDefPDA = PublicKey.findProgramAddressSync(
       [baseSeedCompDefAcc, program.programId.toBuffer(), offset],
@@ -101,7 +144,7 @@ describe("ShuffleDeal", () => {
     console.log("Comp def pda is ", compDefPDA);
 
     const sig = await program.methods
-      .initShuffleAndDealCompDef()
+      .initAddTogetherCompDef()
       .accounts({
         compDefAccount: compDefPDA,
         payer: owner.publicKey,
@@ -111,16 +154,14 @@ describe("ShuffleDeal", () => {
       .rpc({
         commitment: "confirmed",
       });
-    console.log("Init shuffle_and_deal computation definition transaction", sig);
+    console.log("Init add together computation definition transaction", sig);
 
     if (uploadRawCircuit) {
-      const rawCircuit = fs.readFileSync(
-        "build/shuffle_and_deal.arcis"
-      );
+      const rawCircuit = fs.readFileSync("build/add_together.arcis");
 
       await uploadCircuit(
         provider as anchor.AnchorProvider,
-        "shuffle_and_deal",
+        "add_together",
         program.programId,
         rawCircuit,
         true
