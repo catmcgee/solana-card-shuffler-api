@@ -29,22 +29,14 @@ describe("ShuffleDeal", () => {
 
   const arciumEnv = getArciumEnv();
 
-  it("Shuffle and deal cards", async () => {
+  it("Shuffle and deal cards", async function () {
     const owner = readKpJson(`${os.homedir()}/.config/solana/id.json`);
-
-    console.log("Initializing shuffle_and_deal computation definition");
-    const initSig = await initShuffleCompDef(program, owner, false, false);
-    console.log(
-      "Shuffle computation definition initialized with signature",
-      initSig
-    );
-
-    const mxePublicKey = await getMXEPublicKeyWithRetry(
+    await getMXEPublicKeyWithRetry(
       provider as anchor.AnchorProvider,
       program.programId
     );
 
-    console.log("MXE x25519 pubkey is", mxePublicKey);
+    const initSig = await initShuffleCompDef(program, owner, false, false);
 
     const computationOffset = new anchor.BN(randomBytes(8), "hex");
     const cardsPerPlayer = 2;
@@ -63,14 +55,11 @@ describe("ShuffleDeal", () => {
         executingPool: getExecutingPoolAccAddress(program.programId),
         compDefAccount: getCompDefAccAddress(
           program.programId,
-          Buffer.from(
-            getCompDefAccOffset("shuffle_and_deal")
-          ).readUInt32LE()
+          Buffer.from(getCompDefAccOffset("shuffle_and_deal")).readUInt32LE()
         ),
       })
       .signers([owner])
       .rpc({ skipPreflight: true, commitment: "confirmed" });
-    console.log("Queue sig is ", queueSig);
 
     const finalizeSig = await awaitComputationFinalization(
       provider as anchor.AnchorProvider,
@@ -78,8 +67,6 @@ describe("ShuffleDeal", () => {
       program.programId,
       "confirmed"
     );
-    console.log("Finalize sig is ", finalizeSig);
-    console.log("Cards shuffled and dealt successfully!");
   });
 
   async function initShuffleCompDef(
@@ -111,12 +98,13 @@ describe("ShuffleDeal", () => {
       .rpc({
         commitment: "confirmed",
       });
-    console.log("Init shuffle_and_deal computation definition transaction", sig);
+    console.log(
+      "Init shuffle_and_deal computation definition transaction",
+      sig
+    );
 
     if (uploadRawCircuit) {
-      const rawCircuit = fs.readFileSync(
-        "build/shuffle_and_deal.arcis"
-      );
+      const rawCircuit = fs.readFileSync("build/shuffle_and_deal.arcis");
 
       await uploadCircuit(
         provider as anchor.AnchorProvider,

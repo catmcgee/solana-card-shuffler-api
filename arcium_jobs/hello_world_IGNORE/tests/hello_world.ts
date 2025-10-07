@@ -47,7 +47,7 @@ describe("HelloWorld", () => {
     return event;
   };
 
-  const clusterAccount = getClusterAccAddress(1078779259);
+  const arciumEnv = getArciumEnv();
 
   it("Is initialized!", async () => {
     const owner = readKpJson(`${os.homedir()}/.config/solana/id.json`);
@@ -100,7 +100,7 @@ describe("HelloWorld", () => {
           program.programId,
           computationOffset
         ),
-        clusterAccount: clusterAccount,
+        clusterAccount: arciumEnv.arciumClusterPubkey,
         mxeAccount: getMXEAccAddress(program.programId),
         mempoolAccount: getMempoolAccAddress(program.programId),
         executingPool: getExecutingPoolAccAddress(program.programId),

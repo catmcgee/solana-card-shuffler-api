@@ -12,13 +12,11 @@ hello_world = "BWzcgCHBA5mDj3bLQ3vKQ3z6AKuhNiUtLNZAxwFK5m8L"
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "devnet"
+cluster = "localnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
 test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
 
-[test.validator]
-[[test.genesis]]
 address = "BKck65TgoKRokMjQM3datB9oRwJ8rAj2jxPXvHXUvcL6"
 program = "/Users/catmcgee/Documents/work/card_shuffler_api/arcium_jobs/hello_world/artifacts/arcium_program_0.3.0.so"

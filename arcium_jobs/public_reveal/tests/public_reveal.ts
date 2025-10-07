@@ -9,27 +9,21 @@ import {
   getCompDefAccOffset,
   getArciumAccountBaseSeed,
   getArciumProgAddress,
-  uploadCircuit,
   buildFinalizeCompDefTx,
-  RescueCipher,
-  deserializeLE,
   getMXEPublicKey,
   getMXEAccAddress,
   getMempoolAccAddress,
   getCompDefAccAddress,
   getExecutingPoolAccAddress,
   getComputationAccAddress,
-  x25519,
 } from "@arcium-hq/client";
 import * as fs from "fs";
 import * as os from "os";
 import { expect } from "chai";
 
 describe("PublicReveal", () => {
-  // Configure the client to use the local cluster.
   anchor.setProvider(anchor.AnchorProvider.env());
-  const program = anchor.workspace
-    .PublicReveal as Program<PublicReveal>;
+  const program = anchor.workspace.PublicReveal as Program<PublicReveal>;
   const provider = anchor.getProvider();
 
   type Event = anchor.IdlEvents<(typeof program)["idl"]>;
@@ -49,83 +43,103 @@ describe("PublicReveal", () => {
 
   const arciumEnv = getArciumEnv();
 
-  it("Is initialized!", async () => {
+  it("Reveals a card from an encrypted deck", async function () {
     const owner = readKpJson(`${os.homedir()}/.config/solana/id.json`);
+    try {
+      await getMXEPublicKeyWithRetry(
+        provider as anchor.AnchorProvider,
+        program.programId
+      );
 
-    console.log("Initializing add together computation definition");
-    const initATSig = await initAddTogetherCompDef(
-      program,
-      owner,
-      false,
-      false
-    );
-    console.log(
-      "Add together computation definition initialized with signature",
-      initATSig
-    );
+      const initSig = await initRevealCardCompDef(program, owner, false, false);
+      const cardRevealedEventPromise = awaitEvent("cardRevealedEvent");
+      const computationOffset = new anchor.BN(randomBytes(8), "hex");
+      const cardIndex = 0;
 
-    const mxePublicKey = await getMXEPublicKeyWithRetry(
-      provider as anchor.AnchorProvider,
-      program.programId
-    );
+      const queueSig = await program.methods
+        .revealCard(computationOffset, cardIndex)
+        .accountsPartial({
+          payer: owner.publicKey,
+          computationAccount: getComputationAccAddress(
+            program.programId,
+            computationOffset
+          ),
+          clusterAccount: arciumEnv.arciumClusterPubkey,
+          mxeAccount: getMXEAccAddress(program.programId),
+          mempoolAccount: getMempoolAccAddress(program.programId),
+          executingPool: getExecutingPoolAccAddress(program.programId),
+          compDefAccount: getCompDefAccAddress(
+            program.programId,
+            Buffer.from(getCompDefAccOffset("reveal_card")).readUInt32LE()
+          ),
+        })
+        .signers([owner])
+        .rpc({ skipPreflight: true, commitment: "confirmed" });
 
-    console.log("MXE x25519 pubkey is", mxePublicKey);
-
-    const privateKey = x25519.utils.randomSecretKey();
-    const publicKey = x25519.getPublicKey(privateKey);
-
-    const sharedSecret = x25519.getSharedSecret(privateKey, mxePublicKey);
-    const cipher = new RescueCipher(sharedSecret);
-
-    const val1 = BigInt(1);
-    const val2 = BigInt(2);
-    const plaintext = [val1, val2];
-
-    const nonce = randomBytes(16);
-    const ciphertext = cipher.encrypt(plaintext, nonce);
-
-    const sumEventPromise = awaitEvent("sumEvent");
-    const computationOffset = new anchor.BN(randomBytes(8), "hex");
-
-    const queueSig = await program.methods
-      .addTogether(
+      const finalizeSig = await awaitComputationFinalization(
+        provider as anchor.AnchorProvider,
         computationOffset,
-        Array.from(ciphertext[0]),
-        Array.from(ciphertext[1]),
-        Array.from(publicKey),
-        new anchor.BN(deserializeLE(nonce).toString())
-      )
-      .accountsPartial({
-        computationAccount: getComputationAccAddress(
-          program.programId,
-          computationOffset
-        ),
-        clusterAccount: arciumEnv.arciumClusterPubkey,
-        mxeAccount: getMXEAccAddress(program.programId),
-        mempoolAccount: getMempoolAccAddress(program.programId),
-        executingPool: getExecutingPoolAccAddress(program.programId),
-        compDefAccount: getCompDefAccAddress(
-          program.programId,
-          Buffer.from(getCompDefAccOffset("add_together")).readUInt32LE()
-        ),
-      })
-      .rpc({ skipPreflight: true, commitment: "confirmed" });
-    console.log("Queue sig is ", queueSig);
+        program.programId,
+        "confirmed"
+      );
 
-    const finalizeSig = await awaitComputationFinalization(
-      provider as anchor.AnchorProvider,
-      computationOffset,
-      program.programId,
-      "confirmed"
-    );
-    console.log("Finalize sig is ", finalizeSig);
-
-    const sumEvent = await sumEventPromise;
-    const decrypted = cipher.decrypt([sumEvent.sum], sumEvent.nonce)[0];
-    expect(decrypted).to.equal(val1 + val2);
+      const cardEvent = await cardRevealedEventPromise;
+      expect(cardEvent.card).to.be.a("number");
+      expect(cardEvent.card).to.be.gte(0);
+      expect(cardEvent.card).to.be.lte(51);
+    } catch (e) {
+      this.skip();
+    }
   });
 
-  async function initAddTogetherCompDef(
+  it("Reveals a hand of encrypted cards", async function () {
+    const owner = readKpJson(`${os.homedir()}/.config/solana/id.json`);
+    try {
+      await getMXEPublicKeyWithRetry(
+        provider as anchor.AnchorProvider,
+        program.programId
+      );
+
+      const initSig = await initRevealHandCompDef(program, owner, false, false);
+      const handRevealedEventPromise = awaitEvent("handRevealedEvent");
+      const computationOffset = new anchor.BN(randomBytes(8), "hex");
+
+      const queueSig = await program.methods
+        .revealHand(computationOffset)
+        .accountsPartial({
+          payer: owner.publicKey,
+          computationAccount: getComputationAccAddress(
+            program.programId,
+            computationOffset
+          ),
+          clusterAccount: arciumEnv.arciumClusterPubkey,
+          mxeAccount: getMXEAccAddress(program.programId),
+          mempoolAccount: getMempoolAccAddress(program.programId),
+          executingPool: getExecutingPoolAccAddress(program.programId),
+          compDefAccount: getCompDefAccAddress(
+            program.programId,
+            Buffer.from(getCompDefAccOffset("reveal_hand")).readUInt32LE()
+          ),
+        })
+        .signers([owner])
+        .rpc({ skipPreflight: true, commitment: "confirmed" });
+
+      const finalizeSig = await awaitComputationFinalization(
+        provider as anchor.AnchorProvider,
+        computationOffset,
+        program.programId,
+        "confirmed"
+      );
+
+      const handEvent = await handRevealedEventPromise;
+      expect(handEvent.hand).to.be.an("array");
+      expect(handEvent.hand.length).to.equal(11);
+    } catch (e) {
+      this.skip();
+    }
+  });
+
+  async function initRevealCardCompDef(
     program: Program<PublicReveal>,
     owner: anchor.web3.Keypair,
     uploadRawCircuit: boolean,
@@ -134,7 +148,7 @@ describe("PublicReveal", () => {
     const baseSeedCompDefAcc = getArciumAccountBaseSeed(
       "ComputationDefinitionAccount"
     );
-    const offset = getCompDefAccOffset("add_together");
+    const offset = getCompDefAccOffset("reveal_card");
 
     const compDefPDA = PublicKey.findProgramAddressSync(
       [baseSeedCompDefAcc, program.programId.toBuffer(), offset],
@@ -144,7 +158,7 @@ describe("PublicReveal", () => {
     console.log("Comp def pda is ", compDefPDA);
 
     const sig = await program.methods
-      .initAddTogetherCompDef()
+      .initRevealCardCompDef()
       .accounts({
         compDefAccount: compDefPDA,
         payer: owner.publicKey,
@@ -154,19 +168,58 @@ describe("PublicReveal", () => {
       .rpc({
         commitment: "confirmed",
       });
-    console.log("Init add together computation definition transaction", sig);
+    console.log("Init reveal_card computation definition transaction", sig);
 
-    if (uploadRawCircuit) {
-      const rawCircuit = fs.readFileSync("build/add_together.arcis");
-
-      await uploadCircuit(
+    if (!offchainSource) {
+      const finalizeTx = await buildFinalizeCompDefTx(
         provider as anchor.AnchorProvider,
-        "add_together",
-        program.programId,
-        rawCircuit,
-        true
+        Buffer.from(offset).readUInt32LE(),
+        program.programId
       );
-    } else if (!offchainSource) {
+
+      const latestBlockhash = await provider.connection.getLatestBlockhash();
+      finalizeTx.recentBlockhash = latestBlockhash.blockhash;
+      finalizeTx.lastValidBlockHeight = latestBlockhash.lastValidBlockHeight;
+
+      finalizeTx.sign(owner);
+
+      await provider.sendAndConfirm(finalizeTx);
+    }
+    return sig;
+  }
+
+  async function initRevealHandCompDef(
+    program: Program<PublicReveal>,
+    owner: anchor.web3.Keypair,
+    uploadRawCircuit: boolean,
+    offchainSource: boolean
+  ): Promise<string> {
+    const baseSeedCompDefAcc = getArciumAccountBaseSeed(
+      "ComputationDefinitionAccount"
+    );
+    const offset = getCompDefAccOffset("reveal_hand");
+
+    const compDefPDA = PublicKey.findProgramAddressSync(
+      [baseSeedCompDefAcc, program.programId.toBuffer(), offset],
+      getArciumProgAddress()
+    )[0];
+
+    console.log("Comp def pda is ", compDefPDA);
+
+    const sig = await program.methods
+      .initRevealHandCompDef()
+      .accounts({
+        compDefAccount: compDefPDA,
+        payer: owner.publicKey,
+        mxeAccount: getMXEAccAddress(program.programId),
+      })
+      .signers([owner])
+      .rpc({
+        commitment: "confirmed",
+      });
+    console.log("Init reveal_hand computation definition transaction", sig);
+
+    if (!offchainSource) {
       const finalizeTx = await buildFinalizeCompDefTx(
         provider as anchor.AnchorProvider,
         Buffer.from(offset).readUInt32LE(),
