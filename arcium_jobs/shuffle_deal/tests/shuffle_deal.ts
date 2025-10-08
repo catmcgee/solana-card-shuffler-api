@@ -31,12 +31,11 @@ describe("ShuffleDeal", () => {
 
   it("Shuffle and deal cards", async function () {
     const owner = readKpJson(`${os.homedir()}/.config/solana/id.json`);
+    const initSig = await initShuffleCompDef(program, owner, false, false);
     await getMXEPublicKeyWithRetry(
       provider as anchor.AnchorProvider,
       program.programId
     );
-
-    const initSig = await initShuffleCompDef(program, owner, false, false);
 
     const computationOffset = new anchor.BN(randomBytes(8), "hex");
     const cardsPerPlayer = 2;

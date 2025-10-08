@@ -46,12 +46,11 @@ describe("PublicReveal", () => {
   it("Reveals a card from an encrypted deck", async function () {
     const owner = readKpJson(`${os.homedir()}/.config/solana/id.json`);
     try {
+      const initSig = await initRevealCardCompDef(program, owner, false, false);
       await getMXEPublicKeyWithRetry(
         provider as anchor.AnchorProvider,
         program.programId
       );
-
-      const initSig = await initRevealCardCompDef(program, owner, false, false);
       const cardRevealedEventPromise = awaitEvent("cardRevealedEvent");
       const computationOffset = new anchor.BN(randomBytes(8), "hex");
       const cardIndex = 0;
@@ -95,12 +94,11 @@ describe("PublicReveal", () => {
   it("Reveals a hand of encrypted cards", async function () {
     const owner = readKpJson(`${os.homedir()}/.config/solana/id.json`);
     try {
+      const initSig = await initRevealHandCompDef(program, owner, false, false);
       await getMXEPublicKeyWithRetry(
         provider as anchor.AnchorProvider,
         program.programId
       );
-
-      const initSig = await initRevealHandCompDef(program, owner, false, false);
       const handRevealedEventPromise = awaitEvent("handRevealedEvent");
       const computationOffset = new anchor.BN(randomBytes(8), "hex");
 

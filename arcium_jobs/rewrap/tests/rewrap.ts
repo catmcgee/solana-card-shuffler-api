@@ -50,12 +50,11 @@ describe("Rewrap", () => {
   it("transfer_hand completes", async function () {
     const owner = readKpJson(`${os.homedir()}/.config/solana/id.json`);
     try {
+      await initTransferHandCompDef(program, owner, false, false);
       await getMXEPublicKeyWithRetry(
         provider as anchor.AnchorProvider,
         program.programId
       );
-
-      await initTransferHandCompDef(program, owner, false, false);
 
       const eventPromise = awaitEvent("transferCompleteEvent");
       const computationOffset = new anchor.BN(randomBytes(8), "hex");
