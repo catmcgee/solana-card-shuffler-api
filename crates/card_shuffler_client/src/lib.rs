@@ -1,278 +1,73 @@
 use anchor_lang::prelude::*;
-use solana_program::instruction::{AccountMeta, Instruction};
-use solana_program::hash::hashv;
 
-declare_id!("6GvHYdjrQSFPb6TBSx49w5KUb37a3ZdyAwv9D2sHMGWD");
+/// The card_shuffler program ID
+/// This must match the ID in the deployed card_shuffler program
+pub const CARD_SHUFFLER_PROGRAM_ID: Pubkey = solana_program::pubkey!("DQxanaqqWcTYvVhrKbeoY6q52NrGksWBL6vSbuVipnS7");
 
-pub const SHUFFLE_DEAL_PROGRAM_ID: Pubkey = pubkey!("9heUwYsyauSVrMwv3kULC93Ck35WxWyG6EDqcrfJ5me");
-pub const PUBLIC_REVEAL_PROGRAM_ID: Pubkey = pubkey!("4PAak7n6BLNFsYY69wRdWLE2Cs827YzQgd7CMat6XvzS");
-pub const REWRAP_PROGRAM_ID: Pubkey = pubkey!("pS6VM9iBY2xycNJ5gZ5hJxMT3aejVXWoVbggCVQ8ZJ2");
+pub const MAX_HOLE_CARDS: usize = 11;
+pub const MAX_COMMUNITY_CARDS: usize = 5;
+pub const EMPTY_CARD_MARKER: u8 = 53;
 
-#[error_code]
-pub enum ClientError {
-    #[msg("Indices must not be empty")] 
-    EmptyIndices,
+/// Helper function to derive the CardGame PDA from the card_shuffler program
+pub fn get_card_game_pda(game_id: u64) -> (Pubkey, u8) {
+    let game_id_bytes = game_id.to_le_bytes();
+    Pubkey::find_program_address(
+        &[b"card_game", game_id_bytes.as_ref()],
+        &CARD_SHUFFLER_PROGRAM_ID,
+    )
 }
 
-pub type ClientResult<T> = core::result::Result<T, ClientError>;
+/// Represents a card game session with encrypted deck and hands.
+/// This is the main account managed by the card_shuffler program.
 
-#[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug, PartialEq, Eq)]
-pub struct DeckComputationContext {
-    pub computation_offset: u64,
+#[derive(Clone, AnchorSerialize, AnchorDeserialize)]
+pub struct CardGame {
+    /// Encrypted deck split into 3 chunks (52 cards encoded in base-64)
+    pub deck: [[u8; 32]; 3],
+    /// Cryptographic nonce for deck encryption
+    pub deck_nonce: u128,
+    /// Player's encrypted hole cards
+    pub hole_cards: [u8; 32],
+    /// Cryptographic nonce for hole cards encryption
+    pub hole_cards_nonce: u128,
+    /// Number of hole cards currently held
+    pub hole_cards_size: u8,
+    /// Revealed community cards (plaintext)
+    pub community_cards: [u8; 5],
+    /// Number of community cards revealed
+    pub community_cards_size: u8,
+    /// Total number of cards dealt from the deck
+    pub cards_dealt: u8,
+    /// Unique identifier for this game session
+    pub game_id: u64,
+    /// Solana public key of the player
+    pub player_pubkey: Pubkey,
+    /// Player's encryption public key for MPC operations
+    pub player_enc_pubkey: [u8; 32],
+    /// PDA bump seed
+    pub bump: u8,
 }
 
-pub fn set_deck_computation_ix(payer: Pubkey, computation_offset: u64) -> Instruction {
-    let accounts = vec![AccountMeta::new(payer, true)];
-    let data = pack_ix_data("set_deck_computation", &SetDeckComputationData { computation_offset });
-    Instruction { program_id: crate::ID, accounts, data }
-}
-
-pub fn store_encrypted_hole_cards_ix(
-    payer: Pubkey,
-    owner: Pubkey,
-    hand_ciphertext: Vec<u8>,
-) -> Instruction {
-    let accounts = vec![AccountMeta::new(payer, true)];
-    let data = pack_ix_data("store_encrypted_hole_cards", &StoreEncryptedHoleCardsData { owner, hand_ciphertext });
-    Instruction { program_id: crate::ID, accounts, data }
-}
-
-pub fn reveal_community_cards_ix(
-    payer: Pubkey,
-    indices: Vec<u8>,
-) -> ClientResult<Instruction> {
-    if indices.is_empty() {
-        return Err(ClientError::EmptyIndices);
-    }
-    let accounts = vec![AccountMeta::new(payer, true)];
-    let data = pack_ix_data("reveal_community_cards", &RevealCommunityCardsData { indices });
-    Ok(Instruction { program_id: crate::ID, accounts, data })
-}
-
-#[derive(AnchorSerialize, AnchorDeserialize)]
-struct SetDeckComputationData { computation_offset: u64 }
-
-#[derive(AnchorSerialize, AnchorDeserialize)]
-struct StoreEncryptedHoleCardsData { owner: Pubkey, hand_ciphertext: Vec<u8> }
-
-#[derive(AnchorSerialize, AnchorDeserialize)]
-struct RevealCommunityCardsData { indices: Vec<u8> }
-
-fn anchor_sighash(ix_name: &str) -> [u8; 8] {
-    let h = hashv(&[b"global", ix_name.as_bytes()]).to_bytes();
-    let mut out = [0u8; 8];
-    out.copy_from_slice(&h[..8]);
-    out
-}
-
-fn pack_ix_data<T: AnchorSerialize>(ix_name: &str, args: &T) -> Vec<u8> {
-    let mut data = anchor_sighash(ix_name).to_vec();
-    let mut args_bytes = args.try_to_vec().expect("serialize args");
-    data.append(&mut args_bytes);
-    data
-}
-
-pub mod arcium_flows {
-    use super::*;
-
-    pub fn init_shuffle_and_deal_comp_def_ix(
-        comp_def_account: Pubkey,
-        payer: Pubkey,
-        mxe_account: Pubkey,
-    ) -> Instruction {
-        let accounts = vec![
-            AccountMeta::new(comp_def_account, false),
-            AccountMeta::new(payer, true),
-            AccountMeta::new(mxe_account, false),
-        ];
-        let data = pack_ix_data("init_shuffle_and_deal_comp_def", &());
-        Instruction { program_id: SHUFFLE_DEAL_PROGRAM_ID, accounts, data }
-    }
-
-    // shuffle_deal: queue shuffle_and_deal
-    #[derive(AnchorSerialize, AnchorDeserialize)]
-    struct ShuffleAndDealArgs { computation_offset: u64, cards_per_player: u8 }
-
-    pub fn shuffle_and_deal_ix(
-        payer: Pubkey,
-        sign_pda_account: Pubkey,
-        mxe_account: Pubkey,
-        mempool_account: Pubkey,
-        executing_pool: Pubkey,
-        computation_account: Pubkey,
-        comp_def_account: Pubkey,
-        cluster_account: Pubkey,
-        pool_account: Pubkey,
-        clock_account: Pubkey,
-        system_program: Pubkey,
-        arcium_program: Pubkey,
-        computation_offset: u64,
-        cards_per_player: u8,
-    ) -> Instruction {
-        let accounts = vec![
-            AccountMeta::new(payer, true),
-            AccountMeta::new(sign_pda_account, false),
-            AccountMeta::new_readonly(mxe_account, false),
-            AccountMeta::new(mempool_account, false),
-            AccountMeta::new(executing_pool, false),
-            AccountMeta::new(computation_account, false),
-            AccountMeta::new_readonly(comp_def_account, false),
-            AccountMeta::new(cluster_account, false),
-            AccountMeta::new(pool_account, false),
-            AccountMeta::new_readonly(clock_account, false),
-            AccountMeta::new_readonly(system_program, false),
-            AccountMeta::new_readonly(arcium_program, false),
-        ];
-        let data = pack_ix_data(
-            "shuffle_and_deal",
-            &ShuffleAndDealArgs { computation_offset, cards_per_player },
-        );
-        Instruction { program_id: SHUFFLE_DEAL_PROGRAM_ID, accounts, data }
-    }
-
-    // public_reveal: init comp defs
-    pub fn init_reveal_card_comp_def_ix(comp_def_account: Pubkey, payer: Pubkey, mxe_account: Pubkey) -> Instruction {
-        let accounts = vec![
-            AccountMeta::new(comp_def_account, false),
-            AccountMeta::new(payer, true),
-            AccountMeta::new(mxe_account, false),
-        ];
-        let data = pack_ix_data("init_reveal_card_comp_def", &());
-        Instruction { program_id: PUBLIC_REVEAL_PROGRAM_ID, accounts, data }
-    }
-
-    pub fn init_reveal_hand_comp_def_ix(comp_def_account: Pubkey, payer: Pubkey, mxe_account: Pubkey) -> Instruction {
-        let accounts = vec![
-            AccountMeta::new(comp_def_account, false),
-            AccountMeta::new(payer, true),
-            AccountMeta::new(mxe_account, false),
-        ];
-        let data = pack_ix_data("init_reveal_hand_comp_def", &());
-        Instruction { program_id: PUBLIC_REVEAL_PROGRAM_ID, accounts, data }
-    }
-
-    // public_reveal: queue reveal_card
-    #[derive(AnchorSerialize, AnchorDeserialize)]
-    struct RevealCardArgs { computation_offset: u64, card_index: u8 }
-
-    pub fn reveal_card_ix(
-        payer: Pubkey,
-        sign_pda_account: Pubkey,
-        mxe_account: Pubkey,
-        mempool_account: Pubkey,
-        executing_pool: Pubkey,
-        computation_account: Pubkey,
-        comp_def_account: Pubkey,
-        cluster_account: Pubkey,
-        pool_account: Pubkey,
-        clock_account: Pubkey,
-        system_program: Pubkey,
-        arcium_program: Pubkey,
-        computation_offset: u64,
-        card_index: u8,
-    ) -> Instruction {
-        let accounts = vec![
-            AccountMeta::new(payer, true),
-            AccountMeta::new(sign_pda_account, false),
-            AccountMeta::new_readonly(mxe_account, false),
-            AccountMeta::new(mempool_account, false),
-            AccountMeta::new(executing_pool, false),
-            AccountMeta::new(computation_account, false),
-            AccountMeta::new_readonly(comp_def_account, false),
-            AccountMeta::new(cluster_account, false),
-            AccountMeta::new(pool_account, false),
-            AccountMeta::new_readonly(clock_account, false),
-            AccountMeta::new_readonly(system_program, false),
-            AccountMeta::new_readonly(arcium_program, false),
-        ];
-        let data = pack_ix_data("reveal_card", &RevealCardArgs { computation_offset, card_index });
-        Instruction { program_id: PUBLIC_REVEAL_PROGRAM_ID, accounts, data }
-    }
-
-    // public_reveal: queue reveal_hand
-    #[derive(AnchorSerialize, AnchorDeserialize)]
-    struct RevealHandArgs { computation_offset: u64 }
-
-    pub fn reveal_hand_ix(
-        payer: Pubkey,
-        sign_pda_account: Pubkey,
-        mxe_account: Pubkey,
-        mempool_account: Pubkey,
-        executing_pool: Pubkey,
-        computation_account: Pubkey,
-        comp_def_account: Pubkey,
-        cluster_account: Pubkey,
-        pool_account: Pubkey,
-        clock_account: Pubkey,
-        system_program: Pubkey,
-        arcium_program: Pubkey,
-        computation_offset: u64,
-    ) -> Instruction {
-        let accounts = vec![
-            AccountMeta::new(payer, true),
-            AccountMeta::new(sign_pda_account, false),
-            AccountMeta::new_readonly(mxe_account, false),
-            AccountMeta::new(mempool_account, false),
-            AccountMeta::new(executing_pool, false),
-            AccountMeta::new(computation_account, false),
-            AccountMeta::new_readonly(comp_def_account, false),
-            AccountMeta::new(cluster_account, false),
-            AccountMeta::new(pool_account, false),
-            AccountMeta::new_readonly(clock_account, false),
-            AccountMeta::new_readonly(system_program, false),
-            AccountMeta::new_readonly(arcium_program, false),
-        ];
-        let data = pack_ix_data("reveal_hand", &RevealHandArgs { computation_offset });
-        Instruction { program_id: PUBLIC_REVEAL_PROGRAM_ID, accounts, data }
-    }
-
-    // rewrap: transfer_hand comp def
-    pub fn init_transfer_hand_comp_def_ix(comp_def_account: Pubkey, payer: Pubkey, mxe_account: Pubkey) -> Instruction {
-        let accounts = vec![
-            AccountMeta::new(comp_def_account, false),
-            AccountMeta::new(payer, true),
-            AccountMeta::new(mxe_account, false),
-        ];
-        let data = pack_ix_data("init_transfer_hand_comp_def", &());
-        Instruction { program_id: REWRAP_PROGRAM_ID, accounts, data }
-    }
-
-    // rewrap: queue transfer_hand
-    #[derive(AnchorSerialize, AnchorDeserialize)]
-    struct TransferHandArgs { computation_offset: u64 }
-
-    pub fn transfer_hand_ix(
-        payer: Pubkey,
-        sign_pda_account: Pubkey,
-        mxe_account: Pubkey,
-        mempool_account: Pubkey,
-        executing_pool: Pubkey,
-        computation_account: Pubkey,
-        comp_def_account: Pubkey,
-        cluster_account: Pubkey,
-        pool_account: Pubkey,
-        clock_account: Pubkey,
-        system_program: Pubkey,
-        arcium_program: Pubkey,
-        computation_offset: u64,
-    ) -> Instruction {
-        let accounts = vec![
-            AccountMeta::new(payer, true),
-            AccountMeta::new(sign_pda_account, false),
-            AccountMeta::new_readonly(mxe_account, false),
-            AccountMeta::new(mempool_account, false),
-            AccountMeta::new(executing_pool, false),
-            AccountMeta::new(computation_account, false),
-            AccountMeta::new_readonly(comp_def_account, false),
-            AccountMeta::new(cluster_account, false),
-            AccountMeta::new(pool_account, false),
-            AccountMeta::new_readonly(clock_account, false),
-            AccountMeta::new_readonly(system_program, false),
-            AccountMeta::new_readonly(arcium_program, false),
-        ];
-        let data = pack_ix_data("transfer_hand", &TransferHandArgs { computation_offset });
-        Instruction { program_id: REWRAP_PROGRAM_ID, accounts, data }
+impl anchor_lang::AccountSerialize for CardGame {
+    fn try_serialize<W: std::io::Write>(&self, writer: &mut W) -> anchor_lang::Result<()> {
+        AnchorSerialize::serialize(self, writer)
+            .map_err(|_| anchor_lang::error::ErrorCode::AccountDidNotSerialize.into())
     }
 }
 
+impl anchor_lang::AccountDeserialize for CardGame {
+    fn try_deserialize_unchecked(buf: &mut &[u8]) -> anchor_lang::Result<Self> {
+        AnchorDeserialize::deserialize(buf)
+            .map_err(|_| anchor_lang::error::ErrorCode::AccountDidNotDeserialize.into())
+    }
+}
 
+impl anchor_lang::Owner for CardGame {
+    fn owner() -> Pubkey {
+        CARD_SHUFFLER_PROGRAM_ID
+    }
+}
+
+impl anchor_lang::Discriminator for CardGame {
+    const DISCRIMINATOR: &'static [u8] = &[197, 251, 174, 61, 185, 100, 214, 215];
+}

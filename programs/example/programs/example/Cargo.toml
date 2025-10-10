@@ -19,4 +19,5 @@ idl-build = ["anchor-lang/idl-build"]
 
 [dependencies]
 anchor-lang = "0.31.1"
+card_shuffler_client = { path = "../../../../crates/card_shuffler_client" }
 
